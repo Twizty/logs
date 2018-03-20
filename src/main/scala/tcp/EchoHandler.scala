@@ -29,7 +29,8 @@ class EchoHandler(lookup: java.util.concurrent.ConcurrentHashMap[String, Unit]) 
     case PeerClosed     => context stop self
     case Received(data) =>
       val s = sender()
-      val res = buildSyslogEventForm.runA((data, 0))
+      val res = buildSyslogEventForm.runA(data)
+
       res match {
         case None => s ! Write(ByteString("Invalid format\n"))
         case Some(c) =>
@@ -107,7 +108,7 @@ class EchoHandler(lookup: java.util.concurrent.ConcurrentHashMap[String, Unit]) 
 //    }
   }
 
-  def buildSyslogEventForm: OptionalState[(ByteString, Int), SyslogEventForm] = {
+  def buildSyslogEventForm: OptionalState[ByteString, SyslogEventForm] = {
     for {
       priority <- readChunk('>')
       version <- readChunk(' ')
@@ -118,7 +119,7 @@ class EchoHandler(lookup: java.util.concurrent.ConcurrentHashMap[String, Unit]) 
       msgId <- readChunk(' ')
       sourceType <- readChunk('@')
       iana <- readChunk(' ')
-      body <- readChunk(' ')
+      body <- readChunk('\n')
     } yield SyslogEventForm(
       priority.slice(1, priority.length),
       version,
@@ -129,19 +130,18 @@ class EchoHandler(lookup: java.util.concurrent.ConcurrentHashMap[String, Unit]) 
       msgId,
       sourceType.slice(1, sourceType.length),
       iana,
-      body.slice(0, priority.length-2)
+      body.slice(0, body.length-2)
     )
   }
 
-  def readChunk(delimiter: Char): OptionalState[(ByteString, Int), ByteString] = {
-    StateT[Option, (ByteString, Int), ByteString] { state =>
-      val (data, offset) = state
-
-      if (data.length <= offset) {
+  def readChunk(delimiter: Char): OptionalState[ByteString, ByteString] = {
+    StateT[Option, ByteString, ByteString] { state =>
+      if (state.length.isEmpty) {
         None
       } else {
-        val res = data.slice(offset, data.length - 1).takeWhile(_ != delimiter)
-        Some(((data, offset + res.length + 1), res))
+        val res = state.takeWhile(_ != delimiter)
+        val (_, next) = state.splitAt(res.length + 1)
+        Some((next, res))
       }
     }
   }
